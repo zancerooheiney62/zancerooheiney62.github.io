@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NMLTS Demo</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 720px; margin: 0 auto; padding: 16px; background: #f5f5f5; color: #222; }
+  h1 { font-size: 1.2rem; margin: 0 0 1rem; }
+  h2 { font-size: 1.05rem; margin: 0 0 .7rem; }
+  .card { background: #fff; border-radius: 10px; padding: 14px; margin-bottom: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  .messages { height: 280px; overflow-y: auto; border: 1px solid #e5e5e5; border-radius: 8px; padding: 10px; background: #fafafa; margin-bottom: 10px; font-size: .9rem; }
+  .msg { margin-bottom: 8px; padding: 6px 10px; border-radius: 8px; background: #fff; border: 1px solid #eee; word-break: break-word; }
+  .msg .meta { font-size: .72rem; color: #999; margin-bottom: 2px; }
+  .row { display: flex; gap: 8px; }
+  input[type="text"], input[type="password"] { flex: 1; padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: .95rem; min-width: 0; }
+  button { padding: 10px 16px; border: none; border-radius: 8px; background: #222; color: #fff; font-size: .9rem; cursor: pointer; white-space: nowrap; }
+  button.secondary { background: #666; }
+  button:disabled { opacity: .5; cursor: default; }
+  .hint { font-size: .8rem; color: #888; margin-top: 6px; line-height: 1.5; }
+  .hidden { display: none !important; }
+  .tag { display: inline-block; font-size: .72rem; background: #eee; padding: 2px 8px; border-radius: 99px; color: #555; margin-left: 6px; font-weight: normal; }
+  .fatal { background: #fee; color: #900; border: 1px solid #fbb; padding: 12px; border-radius: 8px; margin-bottom: 12px; font-size: .9rem; white-space: pre-wrap; }
+  .rule-box { background: #f9f9f9; border: 1px dashed #ccc; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: .85rem; line-height: 1.75; }
+  .rule-title { font-weight: 600; margin-bottom: 4px; }
+  .rule-body { color: #555; }
+  .link-btn { background: none; border: none; color: #0066cc; cursor: pointer; padding: 4px 0; font-size: .82rem; text-decoration: underline; }
+  .answer-box { margin-top: 6px; padding: 6px 10px; background: #fffbe6; border: 1px solid #ffe58f; border-radius: 6px; font-family: ui-monospace, monospace; font-size: .95rem; }
+</style>
+</head>
+<body>
+
+<div id="fatalError" class="fatal hidden"></div>
+
+<h1>📌 NMLTS Demo</h1>
+
+<!-- 留言墙 -->
+<div class="card">
+  <h2>留言墙 <span class="tag">公开 · 保留 24 小时</span></h2>
+  <div id="wallMessages" class="messages"></div>
+  <div class="row">
+    <input type="text" id="wallInput" placeholder="写下留言（最多 500 字）" maxlength="500">
+    <button id="wallSendBtn">发送</button>
+  </div>
+  <div class="hint">留言发布后 24 小时内对所有人可见，过期后不再显示。</div>
+</div>
+
+<!-- 私密聊天室 -->
+<div class="card">
+  <h2>私密聊天室 <span class="tag">凭每日口令进入</span></h2>
+
+  <div id="roomLogin">
+    <div class="rule-box">
+      <div class="rule-title">📐 今日口令规则（UTC 日期）</div>
+      <div class="rule-body">
+        当前 UTC 日期：<strong id="todayUtc"></strong><br>
+        A = (月 + 日) 的个位<br>
+        B = (月 × 日) 的个位<br>
+        C = (A + B) 的个位<br>
+        口令 = A + <strong id="insertDigitDisplay">7</strong> + B + C
+      </div>
+      <button id="showAnswerBtn" class="link-btn">查看今日口令（demo 便利）</button>
+      <div id="answerBox" class="answer-box hidden"></div>
+    </div>
+
+    <div class="row">
+      <input type="password" id="roomPassword" placeholder="输入今日口令" maxlength="8">
+      <button id="roomEnterBtn">进入</button>
+    </div>
+    <div class="hint">同一天内，输入正确口令的所有人会进入同一个房间。口令每天 UTC 0 点自动更换。</div>
+  </div>
+
+  <div id="roomChat" class="hidden">
+    <div id="roomInfo" class="hint" style="margin-bottom:8px;"></div>
+    <div id="roomMessages" class="messages"></div>
+    <div class="row">
+      <input type="text" id="roomInput" placeholder="发送消息" maxlength="1000">
+      <button id="roomSendBtn">发送</button>
+      <button id="roomLeaveBtn" class="secondary">离开</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+// ============================================================
+// 【配置区】
+// ============================================================
+const SUPABASE_URL = 'https://qkpkcraxuihcuyxyghvo.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_wt2MAEObXEjuqXxpiKb0MQ_aP3SRhzs';
+
+// 口令规则配置（修改这里即可改变规则）
+const RULE_CONFIG = {
+  insertDigit: 7,   // 固定插入的数字（0-9）
+  version: 'v1',    // 规则版本号，修改规则时递增，避免新旧房间混淆
+};
+
+// ============================================================
+// 精简版 Supabase 客户端（内嵌，无外部依赖）
+// ============================================================
+class MiniSupabase {
+  constructor(url, key) {
+    this.url = url.replace(/\/+$/, '');
+    this.key = key;
+    const m = this.url.match(/^https:\/\/([^.]+)\./);
+    this.projectRef = m ? m[1] : null;
+    this.channels = new Map();
+    this.ws = null;
+    this.wsRef = 0;
+    this.heartbeatTimer = null;
+    this.reconnectTimer = null;
+    this.connectPromise = null;
+  }
+  _restHeaders() { return { 'apikey': this.key, 'Authorization': `Bearer ${this.key}` }; }
+  async select(table, opts = {}) {
+    const params = new URLSearchParams();
+    params.set('select', '*');
+    (opts.filters || []).forEach(([col, op, val]) => params.append(col, `${op}.${val}`));
+    if (opts.order) params.set('order', opts.order);
+    if (opts.limit) params.set('limit', String(opts.limit));
+    const res = await fetch(`${this.url}/rest/v1/${table}?${params}`, { headers: this._restHeaders() });
+    if (!res.ok) throw new Error(`[${res.status}] ${await res.text()}`);
+    return res.json();
+  }
+  async insert(table, row) {
+    const res = await fetch(`${this.url}/rest/v1/${table}`, {
+      method: 'POST',
+      headers: { ...this._restHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      body: JSON.stringify(row),
+    });
+    if (!res.ok) throw new Error(`[${res.status}] ${await res.text()}`);
+    return true;
+  }
+  channel(topicName) {
+    const topic = `realtime:${topicName}`;
+    const ch = {
+      topic, _config: null, _handlers: [],
+      on(event, filter, handler) {
+        if (event === 'postgres_changes') {
+          if (!ch._config) ch._config = { broadcast: { ack: false, self: false }, presence: { key: '' }, postgres_changes: [] };
+          ch._config.postgres_changes.push({
+            event: filter.event || '*',
+            schema: filter.schema || 'public',
+            table: filter.table,
+            ...(filter.filter ? { filter: filter.filter } : {}),
+          });
+        }
+        ch._handlers.push({ event, filter, handler });
+        return ch;
+      },
+      subscribe: () => { this._subscribeChannel(ch); return ch; },
+    };
+    return ch;
+  }
+  removeChannel(ch) {
+    if (!ch || !ch.topic) return;
+    this._send({ topic: ch.topic, event: 'phx_leave', payload: {}, ref: String(++this.wsRef) });
+    this.channels.delete(ch.topic);
+  }
+  _subscribeChannel(ch) {
+    const joinFn = () => {
+      const payload = { config: ch._config || { broadcast: { ack: false, self: false }, presence: { key: '' } } };
+      if (this.key.startsWith('eyJ')) payload.access_token = this.key;
+      this._send({ topic: ch.topic, event: 'phx_join', payload, ref: String(++this.wsRef), join_ref: String(this.wsRef) });
+    };
+    this.channels.set(ch.topic, { ch, join: joinFn });
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) joinFn();
+    else this._connect().then(joinFn).catch(err => console.error('[Realtime] 连接失败:', err));
+  }
+  _connect() {
+    if (this.connectPromise) return this.connectPromise;
+    if (!this.projectRef) { this.connectPromise = Promise.reject(new Error('无法从 URL 解析 project ref')); return this.connectPromise; }
+    this.connectPromise = new Promise((resolve, reject) => {
+      const wsUrl = `wss://${this.projectRef}.supabase.co/realtime/v1/websocket?apikey=${encodeURIComponent(this.key)}&vsn=1.0.0`;
+      const ws = new WebSocket(wsUrl);
+      this.ws = ws;
+      const timeout = setTimeout(() => { try { ws.close(); } catch {} reject(new Error('WebSocket 连接超时')); }, 10000);
+      ws.onopen = () => { clearTimeout(timeout); this.channels.forEach(({ join }) => join()); this._startHeartbeat(); resolve(); };
+      ws.onmessage = e => this._handleWsMessage(e);
+      ws.onerror = () => { clearTimeout(timeout); reject(new Error('WebSocket 错误')); };
+      ws.onclose = () => {
+        this.connectPromise = null;
+        this._stopHeartbeat();
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = setTimeout(() => {
+          if (this.channels.size > 0) this._connect().catch(err => console.warn('[Realtime] 重连失败:', err));
+        }, 3000);
+      };
+    });
+    return this.connectPromise;
+  }
+  _send(obj) { if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(obj)); }
+  _startHeartbeat() { this._stopHeartbeat(); this.heartbeatTimer = setInterval(() => this._send({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: String(++this.wsRef) }), 25000); }
+  _stopHeartbeat() { if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; } }
+  _handleWsMessage(e) {
+    let msg; try { msg = JSON.parse(e.data); } catch { return; }
+    if (msg.event === 'phx_reply') return;
+    if (msg.event === 'phx_error') { console.warn('[Realtime] phx_error:', msg); return; }
+    const entry = this.channels.get(msg.topic);
+    if (!entry) return;
+    if (msg.event === 'postgres_changes') {
+      const data = msg.payload && msg.payload.data;
+      if (!data) return;
+      entry.ch._handlers.forEach(({ event, filter, handler }) => {
+        if (event !== 'postgres_changes') return;
+        if (filter.event && filter.event !== data.type) return;
+        if (filter.schema && filter.schema !== data.schema) return;
+        if (filter.table && filter.table !== data.table) return;
+        if (filter.filter) {
+          const m = filter.filter.match(/^(\w+)=eq\.(.+)$/);
+          if (m && String(data.record[m[1]]) !== m[2]) return;
+        }
+        try { handler({ new: data.record }); } catch (err) { console.error('[Realtime] handler 异常:', err); }
+      });
+    }
+  }
+}
+
+// ============================================================
+// 初始化
+// ============================================================
+function showFatal(msg) {
+  const el = document.getElementById('fatalError');
+  if (el) { el.textContent = msg; el.classList.remove('hidden'); }
+}
+if (SUPABASE_URL.includes('YOUR_') || SUPABASE_ANON_KEY.includes('YOUR_')) {
+  showFatal('请先在 index.html 中填入 SUPABASE_URL 和 SUPABASE_ANON_KEY。');
+  throw new Error('missing config');
+}
+const supabaseClient = new MiniSupabase(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ============================================================
+// 口令规则：根据 UTC 日期推算今日口令
+// ============================================================
+function getTodayPassword(now = new Date()) {
+  const M = now.getUTCMonth() + 1;      // 1-12
+  const D = now.getUTCDate();            // 1-31
+  const A = (M + D) % 10;
+  const B = (M * D) % 10;
+  const C = (A + B) % 10;
+  return `${A}${RULE_CONFIG.insertDigit}${B}${C}`;
+}
+
+function verifyPassword(input) {
+  return input.trim() === getTodayPassword();
+}
+
+async function deriveRoomHash(password) {
+  // 口令本身已包含日期信息，用 版本号|口令 做 hash，增加不可预测性
+  const raw = `${RULE_CONFIG.version}|${password}`;
+  if (window.crypto && crypto.subtle) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+  let h = 0;
+  for (let i = 0; i < raw.length; i++) h = ((h << 5) - h + raw.charCodeAt(i)) | 0;
+  return 'h' + (h >>> 0).toString(16).padStart(8, '0');
+}
+
+// ============================================================
+// 工具函数
+// ============================================================
+function escapeHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}
+function getSenderId() {
+  let id = localStorage.getItem('demo_sender_id');
+  if (!id) {
+    id = (crypto.randomUUID && crypto.randomUUID()) || ('u_' + Math.random().toString(36).slice(2) + Date.now().toString(36));
+    localStorage.setItem('demo_sender_id', id);
+  }
+  return id;
+}
+const SENDER_ID = getSenderId();
+
+function appendMessage(container, row, showExpiry = false) {
+  const div = document.createElement('div');
+  div.className = 'msg';
+  const time = new Date(row.created_at).toLocaleString();
+  let meta = `${time} · ${String(row.sender_id).slice(0, 6)}…`;
+  if (showExpiry && row.expires_at) {
+    const left = Math.max(0, Math.round((new Date(row.expires_at) - Date.now()) / 3600000));
+    meta += ` · 剩余 ${left}h`;
+  }
+  div.innerHTML = `<div class="meta">${escapeHtml(meta)}</div>${escapeHtml(row.content)}`;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+// ============================================================
+// 留言墙
+// ============================================================
+const wallMessagesEl = document.getElementById('wallMessages');
+const wallInput = document.getElementById('wallInput');
+const wallSendBtn = document.getElementById('wallSendBtn');
+let wallChannel = null;
+
+async function loadWall() {
+  wallMessagesEl.innerHTML = '';
+  try {
+    const data = await supabaseClient.select('wall_messages', {
+      filters: [['expires_at', 'gt', new Date().toISOString()]],
+      order: 'created_at.asc',
+    });
+    data.forEach(row => appendMessage(wallMessagesEl, row, true));
+  } catch (err) {
+    showFatal('加载留言墙失败：' + err.message);
+  }
+}
+
+function subscribeWall() {
+  if (wallChannel) supabaseClient.removeChannel(wallChannel);
+  wallChannel = supabaseClient
+    .channel('wall-feed')
+    .on('postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'wall_messages' },
+      payload => {
+        if (payload.new && new Date(payload.new.expires_at) > new Date()) {
+          appendMessage(wallMessagesEl, payload.new, true);
+        }
+      })
+    .subscribe();
+}
+
+async function sendWallMessage() {
+  const content = wallInput.value.trim();
+  if (!content) return;
+  wallSendBtn.disabled = true;
+  try {
+    await supabaseClient.insert('wall_messages', {
+      content, sender_id: SENDER_ID,
+      expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    });
+    wallInput.value = '';
+  } catch (err) {
+    alert('发送失败：' + err.message);
+  } finally {
+    wallSendBtn.disabled = false;
+  }
+}
+wallSendBtn.addEventListener('click', sendWallMessage);
+wallInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendWallMessage(); });
+
+// ============================================================
+// 私密聊天室
+// ============================================================
+const roomLogin = document.getElementById('roomLogin');
+const roomChat = document.getElementById('roomChat');
+const roomPassword = document.getElementById('roomPassword');
+const roomEnterBtn = document.getElementById('roomEnterBtn');
+const roomLeaveBtn = document.getElementById('roomLeaveBtn');
+const roomInfo = document.getElementById('roomInfo');
+const roomMessagesEl = document.getElementById('roomMessages');
+const roomInput = document.getElementById('roomInput');
+const roomSendBtn = document.getElementById('roomSendBtn');
+const todayUtcEl = document.getElementById('todayUtc');
+const answerBox = document.getElementById('answerBox');
+const showAnswerBtn = document.getElementById('showAnswerBtn');
+
+let currentRoomHash = null;
+let roomChannel = null;
+
+// 显示今日 UTC 日期和插入数字
+function refreshRuleDisplay() {
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const m = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(now.getUTCDate()).padStart(2, '0');
+  todayUtcEl.textContent = `${y}-${m}-${d}`;
+  document.getElementById('insertDigitDisplay').textContent = RULE_CONFIG.insertDigit;
+}
+refreshRuleDisplay();
+// 每分钟刷新一次，确保跨 UTC 0 点时界面自动更新
+setInterval(refreshRuleDisplay, 60000);
+
+showAnswerBtn.addEventListener('click', () => {
+  const pwd = getTodayPassword();
+  answerBox.textContent = `今日口令：${pwd}`;
+  answerBox.classList.remove('hidden');
+  roomPassword.value = pwd;  // 同时填入输入框，方便直接点“进入”
+});
+
+async function enterRoom() {
+  const pwd = roomPassword.value.trim();
+  if (!pwd) { alert('请输入口令'); return; }
+
+  if (!verifyPassword(pwd)) {
+    alert('口令错误。请根据上方的运算规则，用今天的 UTC 日期计算口令。');
+    return;
+  }
+
+  roomEnterBtn.disabled = true;
+  try {
+    const hash = await deriveRoomHash(pwd);
+    currentRoomHash = hash;
+
+    const data = await supabaseClient.select('chat_messages', {
+      filters: [['room_hash', 'eq', hash]],
+      order: 'created_at.asc',
+    });
+
+    roomMessagesEl.innerHTML = '';
+    data.forEach(row => appendMessage(roomMessagesEl, row));
+
+    roomLogin.classList.add('hidden');
+    roomChat.classList.remove('hidden');
+    const dateStr = new Date().toISOString().slice(0, 10);
+    roomInfo.textContent = `房间 ${hash.slice(0, 12)}… · UTC ${dateStr} · 口令每日自动更换`;
+
+    if (roomChannel) supabaseClient.removeChannel(roomChannel);
+    roomChannel = supabaseClient
+      .channel(`room-${hash}`)
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `room_hash=eq.${hash}` },
+        payload => appendMessage(roomMessagesEl, payload.new))
+      .subscribe();
+  } catch (err) {
+    currentRoomHash = null;
+    alert('进入失败：' + err.message);
+  } finally {
+    roomEnterBtn.disabled = false;
+  }
+}
+
+function leaveRoom() {
+  if (roomChannel) { supabaseClient.removeChannel(roomChannel); roomChannel = null; }
+  currentRoomHash = null;
+  roomChat.classList.add('hidden');
+  roomLogin.classList.remove('hidden');
+  roomPassword.value = '';
+  roomMessagesEl.innerHTML = '';
+  answerBox.classList.add('hidden');
+}
+
+async function sendRoomMessage() {
+  const content = roomInput.value.trim();
+  if (!content || !currentRoomHash) return;
+  roomSendBtn.disabled = true;
+  try {
+    await supabaseClient.insert('chat_messages', {
+      content, sender_id: SENDER_ID, room_hash: currentRoomHash,
+    });
+    roomInput.value = '';
+  } catch (err) {
+    alert('发送失败：' + err.message);
+  } finally {
+    roomSendBtn.disabled = false;
+  }
+}
+
+roomEnterBtn.addEventListener('click', enterRoom);
+roomPassword.addEventListener('keydown', e => { if (e.key === 'Enter') enterRoom(); });
+roomLeaveBtn.addEventListener('click', leaveRoom);
+roomSendBtn.addEventListener('click', sendRoomMessage);
+roomInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendRoomMessage(); });
+
+// ============================================================
+// 启动
+// ============================================================
+loadWall();
+subscribeWall();
+</script>
+</body>
+</html>

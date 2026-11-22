@@ -820,7 +820,7 @@ async function enterRoom() {
 
   const baseCode = await getDailyBaseCode();
   if (raw.slice(0, 3) !== baseCode) {
-    alert(`今日口令前 3 位应为 ${baseCode}，请输入完整 4 位口令（${baseCode} + 房间号）`);
+    alert(`口令错误！！！）`);
     return;
   }
 

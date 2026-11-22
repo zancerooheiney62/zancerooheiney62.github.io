@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>匿名空间</title>
+<title>AnonymousSpace</title>
 <style>
   * { box-sizing: border-box; }
   body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: #f5f5f5; color: #222; }
   header { background: #fff; border-bottom: 1px solid #e8e8e8; padding: 14px 16px 0; position: sticky; top: 0; z-index: 10; }
-  header h1 { font-size: 1.05rem; margin: 0 0 10px; }
+  header h1 { font-size: 1.05rem; margin: 0 0 10px; letter-spacing: .3px; }
   .tabs { display: flex; gap: 4px; }
   .tab { padding: 9px 18px; border: none; background: none; color: #777; cursor: pointer; font-size: .92rem; border-radius: 8px 8px 0 0; transition: background .15s, color .15s; }
   .tab.active { background: #222; color: #fff; }
@@ -35,6 +35,7 @@
   button { padding: 10px 18px; border: none; border-radius: 8px; background: #222; color: #fff; font-size: .9rem; cursor: pointer; white-space: nowrap; transition: opacity .15s; }
   button:hover:not(:disabled) { opacity: .88; }
   button.secondary { background: #888; }
+  button.img-btn { background: #eef2ff; color: #333; padding: 10px 12px; }
   button:disabled { opacity: .5; cursor: default; }
   .hidden { display: none !important; }
   .fatal { background: #fee; color: #900; border: 1px solid #fbb; padding: 12px; border-radius: 8px; margin-bottom: 12px; font-size: .9rem; white-space: pre-wrap; }
@@ -45,6 +46,10 @@
   .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #ccc; margin-right: 5px; vertical-align: middle; }
   .status-dot.on { background: #22c55e; }
   .status-dot.off { background: #ef4444; }
+  .msg-image { max-width: 100%; max-height: 320px; border-radius: 6px; display: block; margin: 4px 0; cursor: zoom-in; background: #f0f0f0; }
+  .msg-text:not(:empty) { margin-top: 2px; }
+  .daily-hint { font-size: .8rem; color: #666; background: #f7f7f7; border: 1px dashed #ddd; border-radius: 6px; padding: 8px 10px; }
+  .daily-hint strong { color: #222; letter-spacing: 1px; }
 </style>
 </head>
 <body>
@@ -52,7 +57,7 @@
 <div id="fatalError" class="fatal hidden" style="margin: 12px;"></div>
 
 <header>
-  <h1>匿名空间</h1>
+  <h1>AnonymousSpace</h1>
   <nav class="tabs">
     <button class="tab active" data-tab="wall">留言墙</button>
     <button class="tab" data-tab="chat">聊天室</button>
@@ -66,17 +71,19 @@
       <div class="messages" id="wallMessages"></div>
       <div class="row">
         <input type="text" id="wallInput" placeholder="写下留言（最多 500 字）" maxlength="500">
+        <button class="img-btn" id="wallImageBtn" title="发送图片">📷</button>
         <button id="wallSendBtn">发送</button>
       </div>
+      <input type="file" id="wallFileInput" accept="image/*" class="hidden">
     </div>
   </section>
 
   <!-- ====== TAB: 聊天室 ====== -->
   <section id="tab-chat" class="tab-panel">
     <div class="card">
-      <!-- 进入表单：不展示任何口令规则提示 -->
       <div id="roomLogin" class="login-form">
-        <input type="password" id="roomPassword" placeholder="口令" autocomplete="off">
+        <!-- <div class="daily-hint" id="dailyCodeHint">正在计算今日频道号…</div> -->
+        <input type="password" id="roomPassword" placeholder="4 位口令" maxlength="4" inputmode="numeric" autocomplete="off">
         <div class="row">
           <input type="text" id="roomNickname" placeholder="昵称" maxlength="20" autocomplete="off">
           <select id="roomGender">
@@ -89,7 +96,6 @@
         <button id="roomEnterBtn">进入聊天室</button>
       </div>
 
-      <!-- 聊天界面 -->
       <div id="roomChat" class="hidden">
         <div class="room-header">
           <span><span class="status-dot" id="roomStatusDot"></span><span id="roomInfo"></span></span>
@@ -98,8 +104,10 @@
         <div class="messages" id="roomMessages"></div>
         <div class="row">
           <input type="text" id="roomInput" placeholder="发送消息" maxlength="1000">
+          <button class="img-btn" id="roomImageBtn" title="发送图片">📷</button>
           <button id="roomSendBtn">发送</button>
         </div>
+        <input type="file" id="roomFileInput" accept="image/*" class="hidden">
       </div>
     </div>
   </section>
@@ -122,8 +130,8 @@ class MiniSupabase {
     const m = this.url.match(/^https:\/\/([^.]+)\./);
     this.projectRef = m ? m[1] : null;
 
-    this.channels = new Map();     // topic -> { ch, join }
-    this.joinedTopics = new Set(); // 已成功 join 的 topic
+    this.channels = new Map();
+    this.joinedTopics = new Set();
     this.ws = null;
     this.wsRef = 0;
     this.heartbeatTimer = null;
@@ -134,14 +142,12 @@ class MiniSupabase {
     this.manualClose = false;
     this.onConnectedCallbacks = [];
 
-    // 网络恢复 / 页面重新可见时主动检查连接
     window.addEventListener('online', () => this._ensureConnected());
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && this.channels.size > 0) this._ensureConnected();
     });
   }
 
-  // ---------- REST ----------
   _restHeaders() {
     return { 'apikey': this.key, 'Authorization': `Bearer ${this.key}` };
   }
@@ -152,10 +158,7 @@ class MiniSupabase {
     (opts.filters || []).forEach(([col, op, val]) => params.append(col, `${op}.${val}`));
     if (opts.order) params.set('order', opts.order);
     if (opts.limit) params.set('limit', String(opts.limit));
-
-    const res = await fetch(`${this.url}/rest/v1/${table}?${params}`, {
-      headers: this._restHeaders(),
-    });
+    const res = await fetch(`${this.url}/rest/v1/${table}?${params}`, { headers: this._restHeaders() });
     if (!res.ok) throw new Error(`[${res.status}] ${await res.text()}`);
     return res.json();
   }
@@ -175,7 +178,6 @@ class MiniSupabase {
     return (data && data[0]) || null;
   }
 
-  // 带重试的 select（网络抖动时自动重试）
   async selectWithRetry(table, opts, retries = 3) {
     let lastErr;
     for (let i = 0; i < retries; i++) {
@@ -186,6 +188,22 @@ class MiniSupabase {
       }
     }
     throw lastErr;
+  }
+
+  // ---------- Storage ----------
+  async upload(bucket, path, blob, contentType) {
+    const res = await fetch(`${this.url}/storage/v1/object/${bucket}/${path}`, {
+      method: 'POST',
+      headers: {
+        'apikey': this.key,
+        'Authorization': `Bearer ${this.key}`,
+        'Content-Type': contentType || blob.type || 'application/octet-stream',
+        'x-upsert': 'false',
+      },
+      body: blob,
+    });
+    if (!res.ok) throw new Error(`[${res.status}] ${await res.text()}`);
+    return `${this.url}/storage/v1/object/public/${bucket}/${path}`;
   }
 
   // ---------- Realtime ----------
@@ -199,13 +217,7 @@ class MiniSupabase {
       _handlers: [],
       on(event, filter, handler) {
         if (event === 'postgres_changes') {
-          if (!ch._config) {
-            ch._config = {
-              broadcast: { ack: false, self: false },
-              presence: { key: '' },
-              postgres_changes: [],
-            };
-          }
+          if (!ch._config) ch._config = { broadcast: { ack: false, self: false }, presence: { key: '' }, postgres_changes: [] };
           ch._config.postgres_changes.push({
             event: filter.event || '*',
             schema: filter.schema || 'public',
@@ -231,19 +243,12 @@ class MiniSupabase {
   _subscribeChannel(ch) {
     const joinFn = () => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-      const payload = {
-        config: ch._config || { broadcast: { ack: false, self: false }, presence: { key: '' } },
-      };
+      const payload = { config: ch._config || { broadcast: { ack: false, self: false }, presence: { key: '' } } };
       if (this.key.startsWith('eyJ')) payload.access_token = this.key;
       const ref = String(++this.wsRef);
-      this._send({
-        topic: ch.topic, event: 'phx_join',
-        payload, ref, join_ref: ref,
-      });
+      this._send({ topic: ch.topic, event: 'phx_join', payload, ref, join_ref: ref });
     };
     this.channels.set(ch.topic, { ch, join: joinFn });
-
-    // 关键修复：已连接才立即 join，否则等 onopen 统一 join（避免双重 join）
     if (this.ws && this.ws.readyState === WebSocket.OPEN && !this.joinedTopics.has(ch.topic)) {
       joinFn();
     } else {
@@ -263,16 +268,12 @@ class MiniSupabase {
       this.connectPromise = Promise.reject(new Error('无法从 SUPABASE_URL 解析 project ref'));
       return this.connectPromise;
     }
-
     this.connectPromise = new Promise((resolve, reject) => {
-      const wsUrl =
-        `wss://${this.projectRef}.supabase.co/realtime/v1/websocket` +
-        `?apikey=${encodeURIComponent(this.key)}&vsn=1.0.0`;
+      const wsUrl = `wss://${this.projectRef}.supabase.co/realtime/v1/websocket?apikey=${encodeURIComponent(this.key)}&vsn=1.0.0`;
       let settled = false;
       const ws = new WebSocket(wsUrl);
       this.ws = ws;
       this.manualClose = false;
-
       const timeout = setTimeout(() => {
         if (settled) return;
         settled = true;
@@ -280,7 +281,6 @@ class MiniSupabase {
         this.connectPromise = null;
         reject(new Error('WebSocket 连接超时'));
       }, 15000);
-
       ws.onopen = () => {
         clearTimeout(timeout);
         if (settled) return;
@@ -288,32 +288,20 @@ class MiniSupabase {
         this.reconnectAttempts = 0;
         this.lastMessageAt = Date.now();
         this.joinedTopics.clear();
-        // 统一在这里 join 所有频道
         this.channels.forEach(({ join }) => join());
         this._startHeartbeat();
-        this._notifyConnected();
+        this.onConnectedCallbacks.forEach(cb => { try { cb(); } catch (e) { console.error(e); } });
         resolve();
       };
-
-      ws.onmessage = e => {
-        this.lastMessageAt = Date.now();
-        this._handleWsMessage(e);
-      };
-
-      ws.onerror = () => { /* 交给 onclose 处理 */ };
-
+      ws.onmessage = e => { this.lastMessageAt = Date.now(); this._handleWsMessage(e); };
+      ws.onerror = () => {};
       ws.onclose = () => {
         clearTimeout(timeout);
         this.connectPromise = null;
         this._stopHeartbeat();
         this.joinedTopics.clear();
-        if (!settled) {
-          settled = true;
-          reject(new Error('WebSocket 连接被关闭'));
-        }
-        if (!this.manualClose && this.channels.size > 0) {
-          this._scheduleReconnect();
-        }
+        if (!settled) { settled = true; reject(new Error('WebSocket 连接被关闭')); }
+        if (!this.manualClose && this.channels.size > 0) this._scheduleReconnect();
       };
     });
     return this.connectPromise;
@@ -323,30 +311,19 @@ class MiniSupabase {
     clearTimeout(this.reconnectTimer);
     const delay = Math.min(30000, 1000 * Math.pow(2, this.reconnectAttempts));
     this.reconnectAttempts++;
-    console.warn(`[Realtime] ${delay}ms 后尝试第 ${this.reconnectAttempts} 次重连`);
     this.reconnectTimer = setTimeout(() => {
-      if (this.channels.size > 0) {
-        this._connect().catch(err => console.warn('[Realtime] 重连失败:', err.message));
-      }
+      if (this.channels.size > 0) this._connect().catch(() => {});
     }, delay);
   }
 
-  _notifyConnected() {
-    this.onConnectedCallbacks.forEach(cb => { try { cb(); } catch (e) { console.error(e); } });
-  }
-
   _send(obj) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(obj));
-    }
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(obj));
   }
 
   _startHeartbeat() {
     this._stopHeartbeat();
     this.heartbeatTimer = setInterval(() => {
-      // 45 秒无任何响应，视为死连接，主动关闭触发重连
       if (Date.now() - this.lastMessageAt > 45000) {
-        console.warn('[Realtime] 心跳超时，主动重连');
         try { this.ws.close(); } catch {}
         return;
       }
@@ -354,21 +331,15 @@ class MiniSupabase {
     }, 25000);
   }
 
-  _stopHeartbeat() {
-    if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
-  }
+  _stopHeartbeat() { if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; } }
 
   _handleWsMessage(e) {
     let msg;
     try { msg = JSON.parse(e.data); } catch { return; }
-
-    // 处理 join 的 ack
     if (msg.event === 'phx_reply') {
       const status = msg.payload && msg.payload.status;
-      if (status === 'ok') {
-        this.joinedTopics.add(msg.topic);
-      } else if (status === 'error') {
-        console.warn('[Realtime] join 被拒绝:', msg.topic, msg.payload);
+      if (status === 'ok') this.joinedTopics.add(msg.topic);
+      else if (status === 'error') {
         this.joinedTopics.delete(msg.topic);
         const entry = this.channels.get(msg.topic);
         if (entry) setTimeout(() => {
@@ -377,15 +348,9 @@ class MiniSupabase {
       }
       return;
     }
-
-    if (msg.event === 'phx_error') {
-      console.warn('[Realtime] phx_error:', msg);
-      return;
-    }
-
+    if (msg.event === 'phx_error') return;
     const entry = this.channels.get(msg.topic);
     if (!entry) return;
-
     if (msg.event === 'postgres_changes') {
       const data = msg.payload && msg.payload.data;
       if (!data) return;
@@ -398,8 +363,7 @@ class MiniSupabase {
           const m = filter.filter.match(/^(\w+)=eq\.(.+)$/);
           if (m && String(data.record[m[1]]) !== m[2]) return;
         }
-        try { handler({ new: data.record }); }
-        catch (err) { console.error('[Realtime] handler 异常:', err); }
+        try { handler({ new: data.record }); } catch (err) { console.error(err); }
       });
     }
   }
@@ -419,7 +383,7 @@ if (SUPABASE_URL.includes('YOUR_') || SUPABASE_ANON_KEY.includes('YOUR_')) {
 const supabaseClient = new MiniSupabase(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ============================================================
-// 工具
+// 工具函数
 // ============================================================
 function escapeHtml(text) {
   const d = document.createElement('div');
@@ -438,19 +402,121 @@ function getSenderId() {
 }
 const SENDER_ID = getSenderId();
 
-async function deriveRoomHash(password) {
-  const dateStr = new Date().toISOString().slice(0, 10);
-  const raw = `${password}|${dateStr}`;
+// 简易 UA 解析，输出形如 "Windows / Chrome (Desktop)"
+function parseDevice(ua) {
+  if (!ua) return 'unknown';
+  let os = 'Unknown OS';
+  if (/Windows NT 10/.test(ua)) os = 'Windows 10/11';
+  else if (/Windows NT/.test(ua)) os = 'Windows';
+  else if (/iPhone|iPad|iPod/.test(ua)) os = 'iOS';
+  else if (/Android/.test(ua)) os = 'Android';
+  else if (/Mac OS X/.test(ua)) os = 'macOS';
+  else if (/Linux/.test(ua)) os = 'Linux';
+
+  let browser = 'Unknown';
+  if (/Edg\//.test(ua)) browser = 'Edge';
+  else if (/OPR\/|Opera/.test(ua)) browser = 'Opera';
+  else if (/Chrome\//.test(ua)) browser = 'Chrome';
+  else if (/Firefox\//.test(ua)) browser = 'Firefox';
+  else if (/Safari\//.test(ua)) browser = 'Safari';
+
+  const mobile = /Mobi|Android|iPhone|iPad/.test(ua);
+  return `${os} / ${browser} (${mobile ? 'Mobile' : 'Desktop'})`;
+}
+
+// 获取发送者 IP / 城市（24 小时缓存，一次请求即可）
+let senderMetaCache = null;
+async function getSenderMeta() {
+  if (senderMetaCache) return senderMetaCache;
+  try {
+    const cached = JSON.parse(localStorage.getItem('demo_sender_meta') || 'null');
+    if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) {
+      senderMetaCache = cached.data;
+      return senderMetaCache;
+    }
+  } catch {}
+
+  const meta = { ip: 'unknown', city: 'unknown', device: parseDevice(navigator.userAgent) };
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    const res = await fetch('https://ipapi.co/json/', { signal: controller.signal });
+    clearTimeout(timer);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.ip) meta.ip = data.ip;
+      const city = [data.city, data.region, data.country_name].filter(Boolean).join(', ');
+      if (city) meta.city = city;
+    }
+  } catch (e) { console.warn('[meta] IP 获取失败:', e.message); }
+
+  senderMetaCache = meta;
+  try { localStorage.setItem('demo_sender_meta', JSON.stringify({ ts: Date.now(), data: meta })); } catch {}
+  return meta;
+}
+
+// 压缩图片（JPEG，最大边 1200px）
+function compressImage(file, maxSize = 1200, quality = 0.75) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxSize || height > maxSize) {
+        const scale = maxSize / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      canvas.toBlob(blob => {
+        URL.revokeObjectURL(url);
+        blob ? resolve(blob) : reject(new Error('图片压缩失败'));
+      }, 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('图片加载失败')); };
+    img.src = url;
+  });
+}
+
+async function uploadImage(file, bucket = 'chat-images') {
+  const blob = await compressImage(file, 1200, 0.75);
+  const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+  return supabaseClient.upload(bucket, path, blob, 'image/jpeg');
+}
+
+// ---------- 口令逻辑 ----------
+// 4 位口令 = 3 位当日频道号(由日期计算) + 1 位房间号(0-9)
+const DAILY_SECRET = 'AnonymousSpace-RoomSecret-v1';
+
+async function getDailyBaseCode(date = new Date()) {
+  const dateStr = date.toISOString().slice(0, 10); // UTC
+  const raw = `${DAILY_SECRET}|${dateStr}`;
   if (window.crypto && crypto.subtle) {
     const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
+    const b = new Uint8Array(buf);
+    const n = ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
+    return String(n % 1000).padStart(3, '0');
+  }
+  // 非安全上下文回退（GitHub Pages 不会走到这里）
+  let h = 0;
+  for (let i = 0; i < raw.length; i++) h = ((h << 5) - h + raw.charCodeAt(i)) | 0;
+  return String(Math.abs(h) % 1000).padStart(3, '0');
+}
+
+async function sha256Hex(str) {
+  if (window.crypto && crypto.subtle) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
   }
   let h = 0;
-  for (let i = 0; i < raw.length; i++) h = ((h << 5) - h + raw.charCodeAt(i)) | 0;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) - h + str.charCodeAt(i)) | 0;
   return 'h' + (h >>> 0).toString(16).padStart(8, '0');
 }
 
-// 用于消息去重（乐观更新 + Realtime 推送可能同一行到达两次）
+// 消息去重
 const renderedKeys = new Set();
 function shouldRender(table, row) {
   if (!row || row.id == null) return true;
@@ -478,6 +544,8 @@ document.querySelectorAll('.tab').forEach(btn => {
 const wallMessagesEl = document.getElementById('wallMessages');
 const wallInput = document.getElementById('wallInput');
 const wallSendBtn = document.getElementById('wallSendBtn');
+const wallImageBtn = document.getElementById('wallImageBtn');
+const wallFileInput = document.getElementById('wallFileInput');
 let wallChannel = null;
 
 function renderWallMessage(container, row) {
@@ -485,9 +553,14 @@ function renderWallMessage(container, row) {
   div.className = 'msg';
   const time = new Date(row.created_at).toLocaleString();
   const left = Math.max(0, Math.round((new Date(row.expires_at) - Date.now()) / 3600000));
-  div.innerHTML =
-    `<div class="meta">${escapeHtml(time)} · ${escapeHtml(String(row.sender_id).slice(0, 6))}… · 剩余 ${left}h</div>` +
-    escapeHtml(row.content);
+  let inner = `<div class="meta">${escapeHtml(time)} · ${escapeHtml(String(row.sender_id).slice(0, 6))}… · 剩余 ${left}h</div>`;
+  if (row.image_url) {
+    inner += `<img class="msg-image" src="${escapeHtml(row.image_url)}" alt="图片" loading="lazy">`;
+  }
+  if (row.content) {
+    inner += `<div class="msg-text">${escapeHtml(row.content)}</div>`;
+  }
+  div.innerHTML = inner;
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
 }
@@ -498,7 +571,6 @@ async function loadWall() {
       filters: [['expires_at', 'gt', new Date().toISOString()]],
       order: 'created_at.asc',
     });
-    // 增量渲染，不整体清空，避免实时消息被冲掉
     (data || []).forEach(row => {
       if (new Date(row.expires_at) > new Date() && shouldRender('wall_messages', row)) {
         renderWallMessage(wallMessagesEl, row);
@@ -534,10 +606,7 @@ async function sendWallMessage() {
       expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     });
     wallInput.value = '';
-    // 乐观更新：立即上屏，Realtime 到达时由 shouldRender 去重
-    if (inserted && shouldRender('wall_messages', inserted)) {
-      renderWallMessage(wallMessagesEl, inserted);
-    }
+    if (inserted && shouldRender('wall_messages', inserted)) renderWallMessage(wallMessagesEl, inserted);
   } catch (err) {
     alert('发送失败：' + err.message);
   } finally {
@@ -545,8 +614,38 @@ async function sendWallMessage() {
   }
 }
 
+async function sendWallImage(file) {
+  if (!file || !file.type.startsWith('image/')) { alert('请选择图片文件'); return; }
+  wallImageBtn.disabled = true;
+  const oldText = wallImageBtn.textContent;
+  wallImageBtn.textContent = '…';
+  try {
+    const imageUrl = await uploadImage(file);
+    const content = wallInput.value.trim();
+    const inserted = await supabaseClient.insert('wall_messages', {
+      content: content || '',
+      sender_id: SENDER_ID,
+      expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      image_url: imageUrl,
+    });
+    wallInput.value = '';
+    if (inserted && shouldRender('wall_messages', inserted)) renderWallMessage(wallMessagesEl, inserted);
+  } catch (err) {
+    alert('发送图片失败：' + err.message);
+  } finally {
+    wallImageBtn.disabled = false;
+    wallImageBtn.textContent = oldText;
+  }
+}
+
 wallSendBtn.addEventListener('click', sendWallMessage);
 wallInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendWallMessage(); });
+wallImageBtn.addEventListener('click', () => wallFileInput.click());
+wallFileInput.addEventListener('change', () => {
+  const file = wallFileInput.files && wallFileInput.files[0];
+  wallFileInput.value = '';
+  if (file) sendWallImage(file);
+});
 
 // ============================================================
 // 私密聊天室
@@ -563,12 +662,21 @@ const roomStatusDot = document.getElementById('roomStatusDot');
 const roomMessagesEl = document.getElementById('roomMessages');
 const roomInput = document.getElementById('roomInput');
 const roomSendBtn = document.getElementById('roomSendBtn');
+const roomImageBtn = document.getElementById('roomImageBtn');
+const roomFileInput = document.getElementById('roomFileInput');
+// const dailyCodeHint = document.getElementById('dailyCodeHint');
 
-// 记住上次输入的昵称/性别（口令不记）
 roomNickname.value = localStorage.getItem('demo_nickname') || '';
 roomGender.value = localStorage.getItem('demo_gender') || '';
 
+// 展示今日频道号（3 位，4 位口令的前 3 位）
+getDailyBaseCode().then(code => {
+console.log(code)
+//   dailyCodeHint.innerHTML = ``;
+});
+
 let currentRoomHash = null;
+let currentRoomDigit = null;
 let currentNickname = null;
 let currentGender = null;
 let roomChannel = null;
@@ -584,13 +692,35 @@ function renderChatMessage(container, row) {
   const nick = row.nickname || '匿名';
   const genderClass = ['male', 'female', 'other'].includes(row.gender) ? row.gender : '';
   const genderIcon = row.gender === 'male' ? '♂' : row.gender === 'female' ? '♀' : row.gender === 'other' ? '⚲' : '';
-  div.innerHTML =
+  let inner =
     `<div class="meta">` +
       `<span class="nick ${genderClass}">${escapeHtml(nick)}</span>` +
       (genderIcon ? `<span class="badge ${genderClass}">${genderIcon}</span>` : '') +
       `<span>· ${escapeHtml(time)}</span>` +
-    `</div>` +
-    escapeHtml(row.content);
+    `</div>`;
+  if (row.image_url) {
+    inner += `<img class="msg-image" src="${escapeHtml(row.image_url)}" alt="图片" loading="lazy">`;
+  }
+  if (row.content) {
+    inner += `<div class="msg-text">${escapeHtml(row.content)}</div>`;
+  }
+  div.innerHTML = inner;
+
+  // 【需求3】点击消息 → 控制台打印发送者 IP / 城市 / 设备信息，不在 UI 中显示
+  div.addEventListener('click', () => {
+    console.log('[AnonymousSpace · Message Meta]', {
+      发送者: row.nickname || '匿名',
+      sender_id: row.sender_id,
+      性别: row.gender || '-',
+      发送时间: row.created_at,
+      IP: row.sender_ip || 'unknown',
+      城市: row.sender_city || 'unknown',
+      设备: row.device_info || 'unknown',
+      内容: row.content || '',
+      图片: row.image_url || null,
+    });
+  });
+
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
 }
@@ -621,27 +751,34 @@ function subscribeRoom() {
       },
       payload => {
         const row = payload.new;
-        if (!row) return;
-        if (shouldRender('chat_messages', row)) renderChatMessage(roomMessagesEl, row);
+        if (row && shouldRender('chat_messages', row)) renderChatMessage(roomMessagesEl, row);
       })
     .subscribe();
 }
 
 async function enterRoom() {
-  const pwd = roomPassword.value.trim();
+  const raw = roomPassword.value.trim();
   const nick = roomNickname.value.trim();
   const gender = roomGender.value;
 
-  if (!pwd) { alert('请输入口令'); return; }
+  if (!/^\d{4}$/.test(raw)) { alert('口令必须是 4 位数字'); roomPassword.focus(); return; }
   if (!nick) { alert('请输入昵称'); roomNickname.focus(); return; }
   if (!gender) { alert('请选择性别'); roomGender.focus(); return; }
+
+  const baseCode = await getDailyBaseCode();
+  if (raw.slice(0, 3) !== baseCode) {
+    alert(`今日口令前 3 位应为 ${baseCode}，请输入完整 4 位口令（${baseCode} + 房间号）`);
+    return;
+  }
 
   localStorage.setItem('demo_nickname', nick);
   localStorage.setItem('demo_gender', gender);
 
   roomEnterBtn.disabled = true;
   try {
-    currentRoomHash = await deriveRoomHash(pwd);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    currentRoomHash = await sha256Hex(`${raw}|${dateStr}`);
+    currentRoomDigit = raw[3];
     currentNickname = nick;
     currentGender = gender;
 
@@ -650,11 +787,8 @@ async function enterRoom() {
     roomChat.classList.remove('hidden');
 
     await loadRoomHistory();
-
-    const dateStr = new Date().toISOString().slice(0, 10);
-    roomInfo.textContent = `${currentNickname} · 频道 ${currentRoomHash.slice(0, 8)}… · ${dateStr}`;
+    roomInfo.textContent = `${currentNickname} · 房间 ${currentRoomDigit} · ${dateStr}`;
     setRoomStatus(false);
-
     subscribeRoom();
   } catch (err) {
     alert('进入失败：' + err.message);
@@ -667,6 +801,7 @@ async function enterRoom() {
 function leaveRoom() {
   if (roomChannel) { supabaseClient.removeChannel(roomChannel); roomChannel = null; }
   currentRoomHash = null;
+  currentRoomDigit = null;
   currentNickname = null;
   currentGender = null;
   roomChat.classList.add('hidden');
@@ -680,21 +815,54 @@ async function sendRoomMessage() {
   if (!content || !currentRoomHash) return;
   roomSendBtn.disabled = true;
   try {
+    const meta = await getSenderMeta();
     const inserted = await supabaseClient.insert('chat_messages', {
       content,
       sender_id: SENDER_ID,
       room_hash: currentRoomHash,
       nickname: currentNickname,
       gender: currentGender,
+      sender_ip: meta.ip,
+      sender_city: meta.city,
+      device_info: meta.device,
     });
     roomInput.value = '';
-    if (inserted && shouldRender('chat_messages', inserted)) {
-      renderChatMessage(roomMessagesEl, inserted);
-    }
+    if (inserted && shouldRender('chat_messages', inserted)) renderChatMessage(roomMessagesEl, inserted);
   } catch (err) {
     alert('发送失败：' + err.message);
   } finally {
     roomSendBtn.disabled = false;
+  }
+}
+
+async function sendRoomImage(file) {
+  if (!file || !file.type.startsWith('image/')) { alert('请选择图片文件'); return; }
+  if (!currentRoomHash) return;
+  roomImageBtn.disabled = true;
+  const oldText = roomImageBtn.textContent;
+  roomImageBtn.textContent = '…';
+  try {
+    const imageUrl = await uploadImage(file);
+    const meta = await getSenderMeta();
+    const content = roomInput.value.trim();
+    const inserted = await supabaseClient.insert('chat_messages', {
+      content: content || '',
+      sender_id: SENDER_ID,
+      room_hash: currentRoomHash,
+      nickname: currentNickname,
+      gender: currentGender,
+      image_url: imageUrl,
+      sender_ip: meta.ip,
+      sender_city: meta.city,
+      device_info: meta.device,
+    });
+    roomInput.value = '';
+    if (inserted && shouldRender('chat_messages', inserted)) renderChatMessage(roomMessagesEl, inserted);
+  } catch (err) {
+    alert('发送图片失败：' + err.message);
+  } finally {
+    roomImageBtn.disabled = false;
+    roomImageBtn.textContent = oldText;
   }
 }
 
@@ -703,10 +871,14 @@ roomPassword.addEventListener('keydown', e => { if (e.key === 'Enter') enterRoom
 roomLeaveBtn.addEventListener('click', leaveRoom);
 roomSendBtn.addEventListener('click', sendRoomMessage);
 roomInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendRoomMessage(); });
+roomImageBtn.addEventListener('click', () => roomFileInput.click());
+roomFileInput.addEventListener('change', () => {
+  const file = roomFileInput.files && roomFileInput.files[0];
+  roomFileInput.value = '';
+  if (file) sendRoomImage(file);
+});
 
-// ============================================================
-// WebSocket 重连成功后：补一次数据，避免断线期间漏消息
-// ============================================================
+// WebSocket 重连后补数据
 supabaseClient.onConnected(() => {
   setRoomStatus(true);
   loadWall();

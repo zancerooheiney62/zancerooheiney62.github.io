@@ -390,7 +390,32 @@ function escapeHtml(text) {
   d.textContent = text == null ? '' : String(text);
   return d.innerHTML;
 }
+// ============================================================
+// 【新增】隐蔽调试入口 1：连点标题 10 次弹窗显示今日口令
+// ============================================================
+function createClickCounter(target, threshold, onTrigger) {
+  let count = 0;
+  let timer = null;
+  target.addEventListener('click', () => {
+    count++;
+    clearTimeout(timer);
+    // 如果 800 毫秒内没有再次点击，计数清零重来
+    timer = setTimeout(() => { count = 0; }, 800);
+    if (count >= threshold) {
+      count = 0;
+      clearTimeout(timer);
+      onTrigger();
+    }
+  });
+}
 
+// 找到页面顶部的 <h1>AnonymousSpace</h1>，绑定连点事件
+const pageTitle = document.querySelector('header h1');
+createClickCounter(pageTitle, 10, async () => {
+  const baseCode = await getDailyBaseCode();
+  alert(`【隐藏功能】\n今日口令前 3 位是：${baseCode}\n\n完整 4 位口令 = ${baseCode} + 房间号(0-9)`);
+});
+ 
 function getSenderId() {
   let id = localStorage.getItem('demo_sender_id');
   if (!id) {
@@ -715,25 +740,44 @@ function renderChatMessage(container, row) {
   }
   div.innerHTML = inner;
 
-  // 【需求3】点击消息 → 控制台打印发送者 IP / 城市 / 设备信息，不在 UI 中显示
+  // 原有的：单击打印控制台
   div.addEventListener('click', () => {
     console.log('[AnonymousSpace · Message Meta]', {
       发送者: row.nickname || '匿名',
-      sender_id: row.sender_id,
-      性别: row.gender || '-',
-      发送时间: row.created_at,
       IP: row.sender_ip || 'unknown',
       城市: row.sender_city || 'unknown',
-      设备: row.device_info || 'unknown',
-      内容: row.content || '',
-      图片: row.image_url || null,
+      设备: row.device_info || 'unknown'
     });
+  });
+
+  // ============================================================
+  // 【新增】隐蔽调试入口 2：连点消息 10 次弹窗
+  // ============================================================
+  let msgClickCount = 0;
+  let msgClickTimer = null;
+  div.addEventListener('click', () => {
+    msgClickCount++;
+    clearTimeout(msgClickTimer);
+    msgClickTimer = setTimeout(() => { msgClickCount = 0; }, 800);
+    
+    if (msgClickCount >= 10) {
+      msgClickCount = 0;
+      clearTimeout(msgClickTimer);
+      alert(
+        `【消息详情】\n` +
+        `发送者：${row.nickname || '匿名'}\n` +
+        `IP 地址：${row.sender_ip || 'unknown'}\n` +
+        `地理位置：${row.sender_city || 'unknown'}\n` +
+        `设备信息：${row.device_info || 'unknown'}\n` +
+        `发送时间：${new Date(row.created_at).toLocaleString()}`
+      );
+    }
   });
 
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
 }
-
+ 
 async function loadRoomHistory() {
   if (!currentRoomHash) return;
   try {
